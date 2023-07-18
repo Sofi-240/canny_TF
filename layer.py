@@ -121,9 +121,6 @@ class CannyEdge(tf.keras.layers.Layer):
                 edge_before_thresh = is_max
             else:
                 edge_before_thresh = edge_before_thresh + is_max
-        # edge_before_thresh = tf.clip_by_value(
-        #     edge_before_thresh, 0.0, 255.0
-        # )
         edge_sure = tf.where(
             tf.math.greater_equal(
                 edge_before_thresh, self.max_val
@@ -140,40 +137,7 @@ class CannyEdge(tf.keras.layers.Layer):
                 )
             ), 255.0, 0.0
         )
-        # kernel = tf.constant(
-        #     [
-        #         [1, 1, 1],
-        #         [1, 0, 1],
-        #         [1, 1, 1]
-        #     ],
-        #     dtype=tf.float32
-        # )
-        # kernel = tf.reshape(
-        #     kernel, shape=(3, 3, 1)
-        # )
-        # connected = None
-        # for _ in range(1):
-        #     if connected is None:
-        #         connected = tf.nn.dilation2d(
-        #             edge_sure,
-        #             kernel,
-        #             (1, 1, 1, 1),
-        #             'SAME',
-        #             'NHWC',
-        #             (1, 1, 1, 1)
-        #         ) - 1
-        #         connected = connected * edge_week
-        #     else:
-        #         connected = tf.nn.dilation2d(
-        #             connected,
-        #             kernel,
-        #             (1, 1, 1, 1),
-        #             'SAME',
-        #             'NHWC',
-        #             (1, 1, 1, 1)
-        #         ) - 1
-        #     connected = connected * edge_week
-
+        # connection between the edges heer
         edge_image = tf.where(
             tf.math.logical_or(
                 tf.math.equal(
