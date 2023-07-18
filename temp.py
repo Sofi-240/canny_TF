@@ -45,14 +45,14 @@ def show(*imgs):
 
 images = load_test()
 
-image = images[0]
+image = images[1]
 edges_opencv = cv2.Canny(np.uint8(image.numpy()[0]), 50, 100)
 X = CannyEdge(max_val=100, min_val=50)
 X.build(input_shape=image.shape)
 
 edge_image, edge_week, edge_sure = X(image)
 
-show(edge_image, edges_opencv)
+show(image, edge_image, edges_opencv)
 show(edge_sure, edge_week)
 
 # kernel = tf.constant(
