@@ -45,58 +45,12 @@ def show(*imgs):
 
 images = load_test()
 
-image = images[1]
+image = images[0]
+
 edges_opencv = cv2.Canny(np.uint8(image.numpy()[0]), 50, 100)
-X = CannyEdge(max_val=100, min_val=50)
-X.build(input_shape=image.shape)
+X = CannyEdge(max_val=100, min_val=50, connection_iterations=25, sigma=1)
+edge_image = X(image)
 
-edge_image, edge_week, edge_sure = X(image)
+show(edge_image, edges_opencv)
 
-show(image, edge_image, edges_opencv)
-show(edge_sure, edge_week)
-
-# kernel = tf.constant(
-#     [
-#         [1, 1, 1, 1, 1],
-#         [1, 1, 0, 1, 1],
-#         [1, 0, 0, 0, 1],
-#         [1, 1, 0, 1, 1],
-#         [1, 1, 1, 1, 1]
-#     ],
-#     dtype=tf.float32
-# )
-# kernel = tf.reshape(
-#     kernel, shape=(5, 5, 1)
-# )
-# kernel = tf.constant(
-#     [
-#         [1, 1, 1],
-#         [1, 0, 1],
-#         [1, 1, 1]
-#     ],
-#     dtype=tf.float32
-# )
-# kernel = tf.reshape(
-#     kernel, shape=(3, 3, 1)
-# )
-# connected = tf.nn.erosion2d(
-#     edge_sure,
-#     kernel,
-#     (1, 1, 1, 1),
-#     'SAME',
-#     'NHWC',
-#     (1, 1, 1, 1)
-# ) + 1
-#
-# edge = tf.where(
-#     tf.math.logical_or(
-#         tf.math.equal(
-#             connected, 255.0
-#         ),
-#         tf.math.equal(
-#             edge_sure, 255.0
-#         )
-#     ), 255.5, 0.0
-# )
-# show(connected, edge, edges_opencv)
 

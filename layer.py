@@ -2,63 +2,28 @@ import tensorflow as tf
 import numpy as np
 
 
-def gaussian_kernel(channels, kernel_size, sigma):
-    ax = tf.range(
-        -kernel_size // 2 + 1.0, kernel_size // 2 + 1.0
-    )
-    xx, yy = tf.meshgrid(ax, ax)
-    k = tf.exp(
-        -(xx ** 2 + yy ** 2) / (2.0 * sigma ** 2)
-    )
-    k = k / tf.reduce_sum(k)
-    k = tf.tile(
-        k[..., tf.newaxis, tf.newaxis], [1, 1, channels, 1]
-    )
-    return k
-
-
 class CannyEdge(tf.keras.layers.Layer):
-    def __init__(self, sigma=0.05, kernel_size=3, min_val=50, max_val=100, **kwargs):
+    def __init__(self, sigma=None, kernel_size=5, min_val=50, max_val=100, connection_iterations=20, **kwargs):
         super(CannyEdge, self).__init__(**kwargs)
         self._input_shape = None
-        self.karnel = None
-        self.sigma = sigma
-        self.kernel_size = kernel_size
-        self.min_val = min_val
-        self.max_val = max_val
-
-    def build(self, input_shape):
-        self._input_shape = input_shape
-        self.karnel = gaussian_kernel(
-            channels=self._input_shape[-1],
-            kernel_size=self.kernel_size,
-            sigma=self.sigma
+        self.gaussian_setup = dict(
+            sigma=sigma, kernel_size=kernel_size
         )
-
-    def call(self, images, *args, **kwargs):
-        if self._input_shape is None:
-            self.build(images.shape)
-
-        images = tf.pad(
-            images,
-            tf.constant([[0, 0], [1, 1], [1, 1], [0, 0]]),
-            mode='REFLECT'
+        self.threshold_setup = dict(
+            min_val=min_val, max_val=max_val
         )
-        images_blur = tf.nn.convolution(
-            images, self.karnel, padding='VALID'
+        self.hysteresis_setup = dict(
+            algorithm='dilation', connection_iterations=connection_iterations
         )
-        gx, gy, gxy = self._sobel_edge(images_blur)
+        # another algorithm option will be DFS.
+        self.zero_pad = tf.keras.layers.ZeroPadding2D(
+            padding=1
+        )
+        self.angles_names = [0, 45, 90, 135]
+        self._set_up = False
 
-        theta = tf.atan2(gx, gy)
-        theta = ((theta * 180 / np.pi) + 90) % 180
-
-        ang_cond = [
-            (tf.math.logical_or, (157.5, 22.5)),
-            (tf.math.logical_and, (22.5, 67.5)),
-            (tf.math.logical_and, (67.5, 112.5)),
-            (tf.math.logical_and, (112.5, 157.5))
-        ]
-        filters = [
+    def _setup(self, input_shape):
+        local_max_filters = [
             [
                 [-np.inf, -np.inf, -np.inf],
                 [0.0, 0.0, 0.0],
@@ -80,35 +45,149 @@ class CannyEdge(tf.keras.layers.Layer):
                 [-np.inf, -np.inf, 0.0]
             ],
         ]
+        angles_call_range = [
+            (tf.math.logical_or, (157.5, 22.5)),
+            (tf.math.logical_and, (22.5, 67.5)),
+            (tf.math.logical_and, (67.5, 112.5)),
+            (tf.math.logical_and, (112.5, 157.5))
+        ]
+
+        """
+        Build the gaussian kernel.
+        """
+        kernel_size = self.gaussian_setup.get('kernel_size')
+        sigma = self.gaussian_setup.get('sigma')
+        if sigma is None:
+            sigma = 0.3 * ((kernel_size - 1) * 0.5 - 1) + 0.8
+
+        ax = tf.range(
+            -kernel_size // 2 + 1.0, kernel_size // 2 + 1.0
+        )
+        xx, yy = tf.meshgrid(ax, ax)
+        normal = 1 / (2.0 * np.pi * (sigma ** 2))
+        kernel = tf.exp(
+            -((xx ** 2) + (yy ** 2)) / (2.0 * (sigma ** 2))
+        ) * normal
+
+        kernel = kernel / tf.reduce_sum(kernel)
+        kernel = tf.tile(
+            kernel[..., tf.newaxis, tf.newaxis], [1, 1, input_shape[-1], 1]
+        )
+        self.gaussian_kernel = kernel
+        self.gaussian_pad = tf.constant(
+            [[0, 0],
+             [kernel_size // 2, kernel_size // 2],
+             [kernel_size // 2, kernel_size // 2],
+             [0, 0]]
+        )
+
+        """
+        Sobel filters.
+        """
+
+        h = tf.constant(
+            [[-1, 0, 1],
+             [-2, 0, 2],
+             [-1, 0, 1]], tf.float32
+        )
+        v = tf.constant(
+            [[-1, -2, -1],
+             [0, 0, 0],
+             [1, 2, 1]], tf.float32
+        )
+        h = tf.tile(
+            h[..., tf.newaxis, tf.newaxis], [1, 1, input_shape[-1], 1]
+        )
+        v = tf.tile(
+            v[..., tf.newaxis, tf.newaxis], [1, 1, input_shape[-1], 1]
+        )
+        self.sobel_filters = tf.concat(
+            (h, v), axis=-1
+        )
+
+        for kernel, call_range, angle in zip(local_max_filters, angles_call_range, self.angles_names):
+            kernel = tf.reshape(
+                tf.constant(
+                    kernel, tf.float32
+                ), [3, 3, 1]
+            )
+            self.__setattr__(
+                f'local_max_kernel_{angle}', kernel
+            )
+            self.__setattr__(
+                f'call_range_{angle}', call_range
+            )
+
+        # self.hysteresis_kernel = tf.constant(
+        #     [
+        #         [1, 1, 1, 1, 1],
+        #         [1, 1, 1, 1, 1],
+        #         [1, 1, 1, 1, 1],
+        #         [1, 1, 1, 1, 1],
+        #         [1, 1, 1, 1, 1]
+        #     ], dtype=tf.float32
+        # )
+        # self.hysteresis_kernel = tf.expand_dims(
+        #     self.hysteresis_kernel, axis=-1
+        # )
+        self.hysteresis_kernel = tf.ones(
+            shape=(8, 8, 1), dtype=tf.float32
+        )
+        self._set_up = True
+
+    def build(self, input_shape):
+        self._input_shape = input_shape
+        self._setup(input_shape)
+
+    def call(self, images, *args, **kwargs):
+        if not self._set_up:
+            self.build(images.shape)
+
+        images = tf.pad(
+            images, self.gaussian_pad, mode='REFLECT'
+        )
+        images_blur = tf.nn.convolution(
+            images, self.gaussian_kernel, padding='VALID'
+        )
+
+        images_blur = self.zero_pad(images_blur)
+        gxy = tf.nn.convolution(
+            images_blur, self.sobel_filters, padding='VALID'
+        )
+        theta = tf.atan2(
+            gxy[..., 0], gxy[..., 1]
+        )
+        theta = ((theta * 180 / np.pi) + 90) % 180
+        gxy = tf.sqrt(
+            tf.square(gxy[..., 0]) + tf.square(gxy[..., 1])
+        )
+        gxy = tf.expand_dims(gxy, axis=-1)
+        theta = tf.expand_dims(theta, axis=-1)
         edge_before_thresh = None
 
-        for ang, kernel in zip(ang_cond, filters):
-            temp_ang = ang[0](
+        for angle in self.angles_names:
+            call_, range_ = self.__getattribute__(f'call_range_{angle}')
+            bool_ang = call_(
                 tf.math.greater_equal(
-                    theta, ang[1][0]
+                    theta, range_[0]
                 ),
                 tf.math.less(
-                    theta, ang[1][1]
+                    theta, range_[1]
                 )
             )
             ang_image = tf.where(
-                temp_ang, gxy, 0.0
+                bool_ang, gxy, 0.0
             )
-            ang_image_pad = tf.keras.layers.ZeroPadding2D(
-                padding=1
-            )(ang_image)
+            ang_image_pad = self.zero_pad(ang_image)
 
+            kernel = self.__getattribute__(f'local_max_kernel_{angle}')
             kernel = tf.reshape(
                 tf.constant(
                     kernel, tf.float32
                 ), [3, 3, 1]
             )
             max_pool_ang = tf.nn.dilation2d(
-                ang_image_pad,
-                kernel, (1, 1, 1, 1),
-                'VALID',
-                'NHWC',
-                (1, 1, 1, 1)
+                ang_image_pad, kernel, (1, 1, 1, 1), 'VALID', 'NHWC', (1, 1, 1, 1)
             )
 
             is_local_max = tf.math.equal(
@@ -121,65 +200,57 @@ class CannyEdge(tf.keras.layers.Layer):
                 edge_before_thresh = is_max
             else:
                 edge_before_thresh = edge_before_thresh + is_max
+
         edge_sure = tf.where(
             tf.math.greater_equal(
-                edge_before_thresh, self.max_val
-            ), 255.0, 0.0
+                edge_before_thresh, self.threshold_setup['max_val']
+            ), 1.0, 0.0
         )
-
         edge_week = tf.where(
             tf.math.logical_and(
                 tf.math.greater_equal(
-                    edge_before_thresh, self.min_val
+                    edge_before_thresh, self.threshold_setup['min_val']
                 ),
                 tf.math.less(
-                    edge_before_thresh, self.max_val
+                    edge_before_thresh, self.threshold_setup['max_val']
                 )
+            ), 1.0, 0.0
+        )
+
+        connected = None
+
+        for i in range(self.hysteresis_setup['connection_iterations']):
+            if connected is None:
+                connected_sure = tf.nn.dilation2d(
+                    edge_sure, self.hysteresis_kernel, (1, 1, 1, 1), 'SAME', 'NHWC', (1, 1, 1, 1)
+                ) - 1
+
+                connected_week = tf.nn.dilation2d(
+                    edge_week, self.hysteresis_kernel, (1, 1, 1, 1), 'SAME', 'NHWC', (1, 1, 1, 1)
+                ) - 1
+                connected = tf.where(
+                    tf.math.greater_equal(
+                        (connected_sure * edge_week) + (connected_week * edge_sure), 1.0
+                    ), 1.0, 0.0
+                )
+                continue
+
+            prev_connected = connected
+            connected = tf.nn.dilation2d(
+                connected, self.hysteresis_kernel, (1, 1, 1, 1), 'SAME', 'NHWC', (1, 1, 1, 1)
+            ) - 1
+
+            connected = tf.where(
+                tf.math.greater_equal(
+                    (connected * edge_week) + (connected * edge_sure), 1.0
+                ), 1.0, 0.0
+            )
+            if tf.math.reduce_max(connected - prev_connected) == 0:
+                break
+
+        edge = tf.where(
+            tf.math.greater_equal(
+                connected + edge_sure, 1.0
             ), 255.0, 0.0
         )
-        # connection between the edges heer
-        edge_image = tf.where(
-            tf.math.logical_or(
-                tf.math.equal(
-                    edge_week, 255.0
-                ),
-                tf.math.equal(
-                    edge_sure, 255.0
-                )
-            ), 255.5, 0.0
-        )
-        return edge_image, edge_week, edge_sure
-
-    def _sobel_edge(self, images):
-        channels = self._input_shape[-1]
-        images = tf.pad(
-            images,
-            tf.constant([[0, 0], [1, 1], [1, 1], [0, 0]]),
-            mode='REFLECT'
-        )
-        h = tf.constant(
-            [[-1, 0, 1],
-             [-2, 0, 2],
-             [-1, 0, 1]], tf.float32
-        )
-        v = tf.constant(
-            [[-1, -2, -1],
-             [0, 0, 0],
-             [1, 2, 1]], tf.float32
-        )
-        h = tf.reshape(
-            h, [3, 3, channels, 1]
-        )
-        v = tf.reshape(
-            v, [3, 3, channels, 1]
-        )
-        gx = tf.nn.convolution(
-            images, h, padding='VALID'
-        )
-        gy = tf.nn.convolution(
-            images, v, padding='VALID'
-        )
-        gxy = tf.sqrt(
-            tf.square(gx) + tf.square(gy)
-        )
-        return gx, gy, gxy
+        return edge
