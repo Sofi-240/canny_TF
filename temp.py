@@ -48,9 +48,9 @@ images = load_test()
 image = images[0]
 
 edges_opencv = cv2.Canny(np.uint8(image.numpy()[0]), 50, 100)
-X = CannyEdge(max_val=100, min_val=50, connection_iterations=25, sigma=1)
+X = CannyEdge(max_val=100, min_val=50, connection_iterations=10, sigma=0.5)
 edge_image = X(image)
 
-show(edge_image, edges_opencv)
+show(image, edge_image, edges_opencv)
 
 

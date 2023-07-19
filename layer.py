@@ -118,20 +118,8 @@ class CannyEdge(tf.keras.layers.Layer):
                 f'call_range_{angle}', call_range
             )
 
-        # self.hysteresis_kernel = tf.constant(
-        #     [
-        #         [1, 1, 1, 1, 1],
-        #         [1, 1, 1, 1, 1],
-        #         [1, 1, 1, 1, 1],
-        #         [1, 1, 1, 1, 1],
-        #         [1, 1, 1, 1, 1]
-        #     ], dtype=tf.float32
-        # )
-        # self.hysteresis_kernel = tf.expand_dims(
-        #     self.hysteresis_kernel, axis=-1
-        # )
         self.hysteresis_kernel = tf.ones(
-            shape=(8, 8, 1), dtype=tf.float32
+            shape=(5, 5, 1), dtype=tf.float32
         )
         self._set_up = True
 
