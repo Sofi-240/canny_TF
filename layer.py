@@ -23,6 +23,10 @@ class CannyEdge(tf.keras.layers.Layer):
         self._set_up = False
 
     def _setup(self, input_shape):
+        if input_shape[-1] != 1:
+            raise ValueError(
+                'The shape of the input need to be (batch_size, height, weight, 1)'
+            )
         local_max_filters = [
             [
                 [-np.inf, -np.inf, -np.inf],
