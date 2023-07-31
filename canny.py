@@ -5,6 +5,15 @@ PI = tf.cast(
 )
 
 
+def clip_value(X, trash=1.0, val=1.0):
+    out = tf.where(
+        tf.math.greater_equal(
+            X, trash
+        ), val, 0.0, name='output'
+    )
+    return out
+
+
 def pad(images, b=None, h=None, w=None, d=None, **kwargs):
     paddings = []
     for arg in [b, h, w, d]:
@@ -103,7 +112,7 @@ def non_maximum_suppression(Gxy, theta):
     edge_before_thresh = tf.zeros_like(Gxy, name='edge_before_thresh')
 
     with tf.name_scope('non_maximum_suppression'):
-        for i in tf.range(4):
+        for i in tf.range(angle_rng.shape[0]):
             kernel = angle_kernel[i, ...]
             rng = angle_rng[i]
             if i == 0:
@@ -154,34 +163,26 @@ def hysteresis_tracking(edge_sure, edge_week, iterations=20, alg='connected'):
             return None
 
 
-def connected_alg(edge_sure, edge_week, iterations=20):
-    hysteresis_kernel = tf.ones(shape=(5, 5, 1), dtype=tf.float32)
+def connected_alg(edge_sure, edge_week, iterations=20, con=5):
+    hysteresis_kernel = tf.ones(shape=(con, con, 1), dtype=tf.float32)
 
-    connected = tf.add(edge_sure, edge_week, name='connected')
     # TODO: bw open?  ---> dilation2d(erosion2d + edge) - edge ---> where >= 1 else 0
     with tf.name_scope('connected_alg'):
+        dil = tf.nn.dilation2d(
+            edge_sure, hysteresis_kernel, (1, 1, 1, 1), 'SAME', 'NHWC', (1, 1, 1, 1)
+        )
+        connected = (dil * edge_week) + edge_sure
         for _ in tf.range(iterations):
-
             prev_connected = tf.identity(connected, name='prev_connected')
-            connected = tf.nn.dilation2d(
-                prev_connected, hysteresis_kernel,
-                (1, 1, 1, 1), 'SAME', 'NHWC', (1, 1, 1, 1), name='connected'
-            ) - 1
-
-            connected = tf.where(
-                tf.math.greater_equal(
-                    (connected * edge_week) + (connected * edge_sure), 1.0
-                ), 1.0, 0.0, name='connected'
+            dil = tf.nn.dilation2d(
+                connected, hysteresis_kernel, (1, 1, 1, 1), 'SAME', 'NHWC', (1, 1, 1, 1)
             )
+            connected = (dil * edge_week) + edge_sure
+
             if tf.math.reduce_max(connected - prev_connected) == 0:
                 break
 
-        edge = tf.where(
-            tf.math.greater_equal(
-                connected + edge_sure, 1.0
-            ), 255.0, 0.0, name='edge'
-        )
-
+        edge = tf.math.multiply(connected, 255.0, name='edge')
         return edge
 
 
@@ -213,4 +214,3 @@ def canny_edge(images, sigma=None, kernel_size=5,
             edge_sure, edge_week, iterations=connection_iterations, alg=hysteresis_alg
         )
         return edge
-
