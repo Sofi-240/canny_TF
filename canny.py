@@ -1,20 +1,15 @@
 import tensorflow as tf
+import collections
 
 PI = tf.cast(
     tf.math.angle(tf.constant(-1, dtype=tf.complex64)), tf.float32
 )
 
 
-def clip_value(X, trash=1.0, val=1.0):
-    out = tf.where(
-        tf.math.greater_equal(
-            X, trash
-        ), val, 0.0, name='output'
-    )
-    return out
-
-
-def pad(images, b=None, h=None, w=None, d=None, **kwargs):
+def pad(X, b=None, h=None, w=None, d=None, **kwargs):
+    n_dim = len(X.get_shape())
+    assert n_dim == 4
+    if not b and not h and not w and not d: return X
     paddings = []
     for arg in [b, h, w, d]:
         arg = arg if arg is not None else [0, 0]
@@ -24,12 +19,16 @@ def pad(images, b=None, h=None, w=None, d=None, **kwargs):
     paddings = tf.constant(paddings, dtype=tf.int32)
 
     padded = tf.pad(
-        images, paddings, **kwargs
+        X, paddings, **kwargs
     )
     return padded
 
 
 def noise_reduction(X, kernel_size, sigma=None):
+    n_dim = len(X.get_shape())
+    assert n_dim == 4
+    assert kernel_size % 2 != 0 and kernel_size > 2
+
     if sigma is None:
         sigma = 0.3 * ((kernel_size - 1) * 0.5 - 1) + 0.8
     ax = tf.range(-kernel_size // 2 + 1.0, kernel_size // 2 + 1.0)
@@ -45,12 +44,14 @@ def noise_reduction(X, kernel_size, sigma=None):
         kernel, shape=(kernel_size, kernel_size, 1, 1), name='gaussian_kernel'
     )
     with tf.name_scope('noise_reduction'):
-        X_pad = pad(X, h=kernel_size // 2, w=kernel_size // 2, mode='SYMMETRIC', name='X_pad')
+        X_pad = pad(X, h=kernel_size // 2, w=kernel_size // 2, constant_values=0.0, name='X_pad')
         Xg = tf.nn.convolution(X_pad, kernel, padding='VALID', name='Xg')
         return Xg
 
 
 def gradient_calculation(X):
+    n_dim = len(X.get_shape())
+    assert n_dim == 4
     sobel_kernel = tf.constant(
         [
             [[[-1, -1]], [[0, -2]], [[1, -1]]],
@@ -69,6 +70,10 @@ def gradient_calculation(X):
 
 
 def non_maximum_suppression(Gxy, theta):
+    gxy_shape = Gxy.get_shape()
+    theta_shape = theta.get_shape()
+    assert len(gxy_shape) == 4 and len(theta_shape) == 4
+
     ang_0_kernel = tf.constant(
         [
             [[-float('inf')], [-float('inf')], [-float('inf')]],
@@ -155,19 +160,19 @@ def double_thresholding(X, min_val=50, max_val=100):
         return edge_sure, edge_week
 
 
-def hysteresis_tracking(edge_sure, edge_week, iterations=20, alg='connected'):
+def hysteresis_tracking(edge_sure, edge_week, alg='dilation', con=None, iterations=None):
+    assert alg == 'connection' or alg == 'dilation'
     with tf.name_scope('hysteresis_tracking'):
-        if alg == 'connected':
-            return connected_alg(edge_sure, edge_week, iterations)
+        if alg == 'dilation':
+            return dilation_tracking(edge_sure, edge_week, con=con, iterations=iterations)
         else:
-            return None
+            return connection_tracking(edge_sure, edge_week, con=con, iterations=iterations)
 
 
-def connected_alg(edge_sure, edge_week, iterations=20, con=5):
+def dilation_tracking(edge_sure, edge_week, iterations=20, con=5):
     hysteresis_kernel = tf.ones(shape=(con, con, 1), dtype=tf.float32)
 
-    # TODO: bw open?  ---> dilation2d(erosion2d + edge) - edge ---> where >= 1 else 0
-    with tf.name_scope('connected_alg'):
+    with tf.name_scope('dilation_alg'):
         dil = tf.nn.dilation2d(
             edge_sure, hysteresis_kernel, (1, 1, 1, 1), 'SAME', 'NHWC', (1, 1, 1, 1)
         )
@@ -186,14 +191,101 @@ def connected_alg(edge_sure, edge_week, iterations=20, con=5):
         return edge
 
 
-@tf.function
-def canny_edge(images, sigma=None, kernel_size=5,
-               min_val=50, max_val=100, hysteresis_alg='connected', connection_iterations=20):
+def connection_tracking(edge_sure, edge_week, con=7, iterations=None):
+    B, H, W, _ = edge_sure.shape
+    ax = tf.range(
+        -con // 2 + 1, (con // 2) + 1, dtype=tf.int64
+    )
+    con_kernel = tf.stack(
+        tf.meshgrid(ax, ax), axis=-1
+    )
+    con_kernel = tf.reshape(
+        con_kernel, shape=(1, con ** 2, 2)
+    )
+    con_up, _, con_down = tf.split(con_kernel, [(con ** 2) // 2, 1, (con ** 2) // 2], axis=1)
+    con_kernel = tf.concat((con_up, con_down), axis=1, name='con_kernel')
+    repeats = con_kernel.shape[1]
+
+    def make_neighbor(cords, name=None):
+        name = name if name is not None else 'neighbor'
+        b, yx, _ = tf.split(
+            cords, [1, 2, 1], axis=1
+        )
+        yx = yx[:, tf.newaxis, ...]
+
+        yx = yx + con_kernel
+
+        b = tf.repeat(
+            b[:, tf.newaxis, ...], repeats=repeats, axis=1
+        )
+
+        y, x = tf.split(yx, [1, 1], axis=-1)
+        y = tf.reshape(y, shape=(-1,))
+        y = tf.where(tf.logical_or(tf.math.greater(y, H - 1), tf.math.less(y, 0)), 0, y)
+        y = tf.reshape(y, shape=(-1, repeats, 1))
+
+        x = tf.reshape(x, shape=(-1,))
+        x = tf.where(tf.logical_or(tf.math.greater(x, W - 1), tf.math.less(x, 0)), 0, x)
+        x = tf.reshape(x, shape=(-1, repeats, 1))
+
+        neighbor = tf.concat(
+            (b, y, x), axis=-1, name=name
+        )
+        neighbor = tf.reshape(neighbor, shape=(-1, 3))
+        return tf.pad(
+            neighbor, paddings=tf.constant([[0, 0], [0, 1]]), constant_values=0, name=name
+        )
+
+    output = tf.zeros_like(edge_sure)
+    connected_index = tf.where(tf.math.equal(edge_sure, 1.0))
+
+    with tf.name_scope('connection_tracking'):
+        def one_iter(out, con_index, week):
+            n = con_index.get_shape()[0]
+            out = tf.tensor_scatter_nd_update(
+                out, con_index, tf.ones((n,), dtype=tf.float32)
+            )
+            week = week * (1.0 - out)
+            index_lookup = make_neighbor(con_index)
+            n = index_lookup.get_shape()[0]
+            unique = tf.scatter_nd(
+                index_lookup, tf.ones((n,), dtype=tf.float32), shape=out.shape
+            )
+
+            con_index = tf.where(
+                tf.math.equal(unique * week, 1.0)
+            )
+            return out, con_index, week
+
+        def check(out, con_index, week):
+            n = con_index.get_shape()[0]
+            if not n or n == 0:
+                return False
+            return True
+
+        loop_params = collections.namedtuple('loop_params', 'out, con_index, week')
+        loop_vars = loop_params(output, connected_index, edge_week)
+
+        output, connected_index, edge_week = tf.while_loop(check, one_iter, loop_vars=loop_vars,
+                                                           maximum_iterations=iterations)
+        output = tf.math.multiply(output, 255.0, name='edge')
+        return output
+
+
+# @tf.function
+def canny_edge(images,
+               sigma=None,
+               kernel_size=5,
+               min_val=50,
+               max_val=100,
+               hysteresis_tracking_alg='dilation',
+               tracking_con=5,
+               tracking_iterations=20):
     X = tf.identity(images, name='X') if tf.is_tensor(images) else tf.convert_to_tensor(images, name='X')
     n_dim = len(X.shape)
     if n_dim < 2:
         raise ValueError(
-            f'expected for 2/3/4D tensor but got {n_dim} tensor'
+            f'expected for 2/3/4D tensor but got {n_dim}D'
         )
     X = tf.expand_dims(X, axis=-1, name='X') if n_dim == 2 else X
     X = tf.expand_dims(X, axis=0, name='X') if n_dim <= 3 else X
@@ -211,6 +303,6 @@ def canny_edge(images, sigma=None, kernel_size=5,
             edge_before_thresh, min_val=min_val, max_val=max_val
         )
         edge = hysteresis_tracking(
-            edge_sure, edge_week, iterations=connection_iterations, alg=hysteresis_alg
+            edge_sure, edge_week, alg=hysteresis_tracking_alg, con=tracking_con, iterations=tracking_iterations
         )
         return edge

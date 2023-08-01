@@ -4,6 +4,7 @@ from canny import *
 import matplotlib
 import tensorflow as tf
 import numpy as np
+import collections
 
 matplotlib.use("Qt5Agg")
 
@@ -25,10 +26,27 @@ def show_images(images, subplot_x=1, subplot_y=1):
         show(images[i], fig.axes[i])
 
 
-img = cv2.imread('test_img.jpg', 0)
+img = cv2.imread('V2_2.jpg', 0)
 
-edge_tf = canny_edge(img, max_val=100, min_val=50, connection_iterations=20, kernel_size=5, sigma=0.8)
+# tf.config.run_functions_eagerly(True)
+
+edges_con = canny_edge(img,
+                       sigma=0.8,
+                       kernel_size=5,
+                       min_val=50,
+                       max_val=100,
+                       hysteresis_tracking_alg='connection',
+                       tracking_con=15,
+                       tracking_iterations=None)
+
+edges_dil = canny_edge(img,
+                       sigma=0.8,
+                       kernel_size=5,
+                       min_val=50,
+                       max_val=100,
+                       hysteresis_tracking_alg='dilation',
+                       tracking_con=5,
+                       tracking_iterations=20)
 
 edges_opencv = cv2.Canny(img, 50, 100)
-show_images([edges_opencv, edge_tf[0, ...]], subplot_x=2, subplot_y=1)
-
+show_images([edges_opencv, edges_con[0, ...], edges_dil[0, ...]], subplot_x=3, subplot_y=1)
