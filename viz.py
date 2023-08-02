@@ -3,11 +3,8 @@ if __name__ == '__main__':
     from canny import canny_edge
     import cv2
     import matplotlib
-    import tensorflow as tf
 
     matplotlib.use("Qt5Agg")
-
-    tf.config.run_functions_eagerly(True)
 
     image = cv2.imread('V2_2.jpg')[..., ::-1]
 
