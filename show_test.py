@@ -4,7 +4,6 @@ from canny import *
 import matplotlib
 import tensorflow as tf
 import numpy as np
-import collections
 
 matplotlib.use("Qt5Agg")
 
