@@ -187,8 +187,7 @@ def dilation_tracking(edge_sure, edge_week, iterations=20, con=5):
             if tf.math.reduce_max(connected - prev_connected) == 0:
                 break
 
-        edge = tf.math.multiply(connected, 255.0, name='edge')
-        return edge
+        return tf.identity(connected, name='edge')
 
 
 def connection_tracking(edge_sure, edge_week, con=7, iterations=None):
@@ -268,11 +267,9 @@ def connection_tracking(edge_sure, edge_week, con=7, iterations=None):
 
         output, connected_index, edge_week = tf.while_loop(check, one_iter, loop_vars=loop_vars,
                                                            maximum_iterations=iterations)
-        output = tf.math.multiply(output, 255.0, name='edge')
-        return output
+        return tf.identity(output, name='edge')
 
 
-# @tf.function
 def canny_edge(images,
                sigma=None,
                kernel_size=5,
@@ -282,13 +279,27 @@ def canny_edge(images,
                tracking_con=5,
                tracking_iterations=20):
     X = tf.identity(images, name='X') if tf.is_tensor(images) else tf.convert_to_tensor(images, name='X')
-    n_dim = len(X.shape)
-    if n_dim < 2:
+
+    shape_ = X.get_shape()
+    n_dim_ = len(shape_)
+    d_type = X.dtype
+
+    if n_dim_ < 2:
         raise ValueError(
-            f'expected for 2/3/4D tensor but got {n_dim}D'
+            f'expected for 2/3/4D tensor but got {n_dim_}D'
         )
-    X = tf.expand_dims(X, axis=-1, name='X') if n_dim == 2 else X
-    X = tf.expand_dims(X, axis=0, name='X') if n_dim <= 3 else X
+
+    X = tf.reshape(X, shape=(1, shape_[0], shape_[1], 1), name='X') if n_dim_ == 2 else X
+    if n_dim_ == 3:
+        X = tf.expand_dims(X, axis=-1, name='X') if shape_[-1] > 3 else tf.expand_dims(X, axis=0, name='X')
+
+    if X.shape[-1] != 3 and X.shape[-1] != 1:
+        raise ValueError(
+            f'expected feature dim with size of 3 for RGB image and size of 1 for gray scale image'
+        )
+
+    if shape_[-1] == 3:
+        X = tf.image.rgb_to_grayscale(X, name='X')
 
     X = tf.cast(X, dtype=tf.float32, name='X')
     with tf.name_scope('canny_edge'):
@@ -305,4 +316,9 @@ def canny_edge(images,
         edge = hysteresis_tracking(
             edge_sure, edge_week, alg=hysteresis_tracking_alg, con=tracking_con, iterations=tracking_iterations
         )
-        return edge
+
+    if d_type == 'uint8':
+        edge = edge * 255.0
+
+    edge = tf.cast(edge, dtype=d_type, name='edge')
+    return edge
