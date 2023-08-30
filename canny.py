@@ -2,10 +2,12 @@ import tensorflow as tf
 from dataclasses import dataclass
 
 PI = tf.cast(tf.math.angle(tf.constant(-1, dtype=tf.complex64)), tf.float32)
+math_ops = tf.math
 
 
 class Canny:
-    def __init__(self, sigma=0.8, threshold_min=50, threshold_max=80, tracking_con=5, tracking_iterations=20):
+    def __init__(self, sigma: float = 0.8, threshold_min: int = 50, threshold_max: int = 80,
+                 tracking_con: int = 5, tracking_iterations: int = 5):
         self.kernels = self.kernels(sigma, tracking_con)
         self.threshold = (threshold_min, threshold_max)
         self.tracking_iter = tracking_iterations
@@ -37,42 +39,42 @@ class Canny:
             gaussian_kernel = next(kernels_).kernel
             Xg = tf.nn.convolution(X, gaussian_kernel, padding='SAME', name='Xg')
 
-        with tf.name_scope('gradient_calculation'):
+        with tf.name_scope('gradient'):
             sobel_kernel = next(kernels_).kernel
             Gxy = tf.nn.convolution(Xg, sobel_kernel, padding='SAME', name='Gxy')
             gx, gy = tf.split(Gxy, [1, 1], axis=-1)
-            theta = ((tf.atan2(gx, gy, name='theta') * 180 / PI) + 90) % 180
-            Gxy = tf.sqrt((gx ** 2) + (gy ** 2), name='Gxy')
+            theta = ((math_ops.atan2(gx, gy, name='theta') * 180 / PI) + 90) % 180
+            Gxy = math_ops.sqrt((gx ** 2) + (gy ** 2), name='Gxy')
             Gxy = tf.clip_by_value(Gxy, 0, 255.)
 
         with tf.name_scope('non_maximum_suppression'):
             angle_kernel = next(kernels_)
             angle_X = []
             low, high = angle_kernel.carry[0]
-            tmp = tf.math.logical_or(tf.math.greater_equal(theta, low), tf.math.less_equal(theta, high))
+            tmp = math_ops.logical_or(math_ops.greater_equal(theta, low), math_ops.less_equal(theta, high))
             angle_X.append(tmp)
 
             for low, high in angle_kernel.carry[1:]:
-                tmp = tf.math.logical_and(tf.math.greater_equal(theta, low), tf.math.less(theta, high))
+                tmp = math_ops.logical_and(math_ops.greater_equal(theta, low), math_ops.less(theta, high))
                 angle_X.append(tmp)
 
             angle_X = tf.cast(tf.concat(angle_X, -1), tf.float32) * Gxy
 
             max_pool_ang = tf.nn.dilation2d(
-                alg.kernels.pad(angle_X, h=1, w=1, constant_values=0.0),
+                kernels_.pad(angle_X, h=1, w=1, constant_values=0.0),
                 angle_kernel.kernel, (1, 1, 1, 1), 'VALID', 'NHWC', (1, 1, 1, 1)
             )
 
         with tf.name_scope('double_thresholding'):
             threshold_min, threshold_max = self.threshold
             edge_ = tf.where(
-                tf.math.logical_and(
-                    tf.math.equal(max_pool_ang, angle_X), tf.math.greater(max_pool_ang, threshold_min)
-                ), Gxy, 0.0
+                math_ops.logical_and(math_ops.equal(max_pool_ang, angle_X), max_pool_ang > threshold_min), Gxy, 0.0
             )
             edge_ = tf.expand_dims(tf.reduce_max(edge_, axis=-1), -1)
-            edge_sure = tf.where(tf.math.greater_equal(edge_, threshold_max), 1.0, 0.0, name='edge_sure')
-            edge_week = tf.where(tf.logical_and(tf.math.greater_equal(edge_, threshold_min), tf.math.less(edge_, threshold_max)), 1.0, 0.0, name='edge_week')
+            edge_sure = tf.where(edge_ >= threshold_max, 1.0, 0.0, name='edge_sure')
+            edge_week = tf.where(
+                math_ops.logical_and(edge_ >= threshold_min, edge_ < threshold_max), 1.0, 0.0, name='edge_week'
+            )
 
         with tf.name_scope('dilation_tracking'):
             hysteresis_kernel = next(kernels_).kernel
@@ -86,7 +88,7 @@ class Canny:
                     curr, hysteresis_kernel, (1, 1, 1, 1), 'SAME', 'NHWC', (1, 1, 1, 1)
                 )
                 curr = (dilation * edge_week) + edge_sure - 1
-                return curr, tf.math.reduce_max(curr - prev) != 0
+                return curr, math_ops.reduce_max(curr - prev) != 0
 
             edge, _ = tf.while_loop(check, main_, loop_vars=(edge_sure, True), maximum_iterations=self.tracking_iter)
             edge = tf.where(edge + edge_sure > 0, 1.0, 0)
@@ -98,7 +100,7 @@ class Canny:
         return edge
 
     class kernels:
-        def __init__(self, sigma=0.8, con=5):
+        def __init__(self, sigma: float = 0.8, con: int = 5):
             self.items = []
             if sigma < 0.8: raise ValueError('minimum kernel size need to be size of 3 --> sigma > 0.8')
             self.sigma = sigma
@@ -198,6 +200,27 @@ class Canny:
                 return self.name
 
 
+def make_gif(canny_alg: Canny, vid_name: str, out_name: str = 'output'):
+    import cv2
+    import imageio
+    cap = cv2.VideoCapture(vid_name)
+    frames = []
+    for _ in range(int(cap.get(cv2.CAP_PROP_FRAME_COUNT))):
+        _, frame = cap.read()
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frames.append(tf.convert_to_tensor(frame))
+    cap.release()
+    frames = tf.cast(frames, dtype=tf.float32)
+    edges = canny_alg(frames)
+    frames = []
+    for frame in edges:
+        frame = cv2.flip(tf.repeat(frame * 255, axis=-1, repeats=3).numpy().astype('uint8'), 0)
+        frame = imageio.core.util.Array(frame)
+        frames.append(frame)
+        frames.append(frame)
+    imageio.mimsave(f'{out_name}.gif', frames, fps=55)
+
+
 if __name__ == '__main__':
     from matplotlib import pyplot as plt
     import matplotlib
@@ -208,14 +231,13 @@ if __name__ == '__main__':
     image = tf.convert_to_tensor(tf.keras.utils.img_to_array(image), dtype=tf.float32)
 
     alg = Canny(sigma=1.2, tracking_iterations=5, threshold_max=80, tracking_con=3, threshold_min=50)
+    edge = alg(image)
 
     fig, _ = plt.subplots(1, 2, subplot_kw={'xticks': [], 'yticks': []})
     fig.subplots_adjust(wspace=0, hspace=0)
 
     fig.axes[0].imshow(tf.squeeze(image).numpy().astype('uint8'), cmap='gray')
     fig.axes[0].set_title('Original image')
-
-    edge = alg(image)
 
     fig.axes[1].imshow(tf.squeeze(edge).numpy().astype('uint8'), cmap='gray')
     fig.axes[1].set_title('edge')
