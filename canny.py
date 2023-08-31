@@ -200,26 +200,6 @@ class Canny:
                 return self.name
 
 
-def make_gif(canny_alg: Canny, vid_name: str, out_name: str = 'output'):
-    import cv2
-    import imageio
-    cap = cv2.VideoCapture(vid_name)
-    frames = []
-    for _ in range(int(cap.get(cv2.CAP_PROP_FRAME_COUNT))):
-        _, frame = cap.read()
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frames.append(tf.convert_to_tensor(frame))
-    cap.release()
-    frames = tf.cast(frames, dtype=tf.float32)
-    edges = canny_alg(frames)
-    frames = []
-    for frame in edges:
-        frame = cv2.flip(tf.repeat(frame * 255, axis=-1, repeats=3).numpy().astype('uint8'), 0)
-        frame = imageio.core.util.Array(frame)
-        frames.append(frame)
-        frames.append(frame)
-    imageio.mimsave(f'{out_name}.gif', frames, fps=55)
-
 
 if __name__ == '__main__':
     from matplotlib import pyplot as plt
