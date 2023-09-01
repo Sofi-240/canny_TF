@@ -1,8 +1,8 @@
 import tensorflow as tf
 from dataclasses import dataclass
 
-PI = tf.cast(tf.math.angle(tf.constant(-1, dtype=tf.complex64)), tf.float32)
 math_ops = tf.math
+PI = tf.cast(math_ops.angle(tf.constant(-1, dtype=tf.complex64)), tf.float32)
 
 
 class Canny:
