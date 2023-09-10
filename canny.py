@@ -200,24 +200,3 @@ class Canny:
                 return self.name
 
 
-
-if __name__ == '__main__':
-    from matplotlib import pyplot as plt
-    import matplotlib
-
-    matplotlib.use("Qt5Agg")
-
-    image = tf.keras.utils.load_img('luka.jpeg')
-    image = tf.convert_to_tensor(tf.keras.utils.img_to_array(image), dtype=tf.float32)
-
-    alg = Canny(sigma=1.2, tracking_iterations=5, threshold_max=80, tracking_con=3, threshold_min=50)
-    edge = alg(image)
-
-    fig, _ = plt.subplots(1, 2, subplot_kw={'xticks': [], 'yticks': []})
-    fig.subplots_adjust(wspace=0, hspace=0)
-
-    fig.axes[0].imshow(tf.squeeze(image).numpy().astype('uint8'), cmap='gray')
-    fig.axes[0].set_title('Original image')
-
-    fig.axes[1].imshow(tf.squeeze(edge).numpy().astype('uint8'), cmap='gray')
-    fig.axes[1].set_title('edge')
